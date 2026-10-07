@@ -4,7 +4,7 @@
 
 ## Скачать
 
-**[Переводчик.zip — последняя версия](https://github.com/aboba-hash/GameTranslator/releases/latest)**
+**[Скачать Переводчик (zip, 31 МБ)](https://github.com/aboba-hash/GameTranslator/releases/latest/download/Perevodchik.zip)** · [все версии](https://github.com/aboba-hash/GameTranslator/releases)
 
 Распакуйте архив в любую папку и запустите `Переводчик.exe`. Python не нужен.
 
