@@ -758,8 +758,11 @@ def online_translate(texts, sl=SOURCE_LANG, tl=TARGET_LANG, spell=False):
 
 
 # ---------- перевод нейросетью (Groq) ----------
-# Ключ: переменная окружения GROQ_API_KEY, или файл "ключ_groq.txt" рядом с программой,
-# или ~/.config/watch/.env (строка GROQ_API_KEY=...). Получить бесплатно: https://console.groq.com/keys
+# Ключ - у каждого свой (бесплатный лимит делится на всех, кто пользуется одним ключом):
+# вводится в окне "Настройки…" и хранится в файле "ключ_groq.txt" рядом с программой
+# (или переменная окружения GROQ_API_KEY). Получить бесплатно: https://console.groq.com/keys
+KEY_FILE = os.path.join(APP_DIR, "ключ_groq.txt")
+KEY_URL = "https://console.groq.com/keys"
 AI_HOST = "api.groq.com"
 AI_TO_EN = ("You translate Russian gaming-chat messages into English. Convey the meaning and intent, not the words: "
             "understand slang, gamer jargon (катка = match, мид = mid lane, лайн = lane, тащить = carry, "
@@ -786,21 +789,23 @@ class AIUnavailable(Exception):
 
 def ai_key():
     key = os.environ.get("GROQ_API_KEY", "").strip()
-    files = [os.path.join(APP_DIR, "ключ_groq.txt"), os.path.expanduser("~/.config/watch/.env")]
-    for path in files:
-        if key:
-            break
+    if not key:
         try:
-            for line in open(path, encoding="utf-8-sig"):
-                line = line.strip()
-                if line.startswith("GROQ_API_KEY="):
-                    line = line.split("=", 1)[1]
-                if line.startswith("gsk_"):
-                    key = line.strip().strip('"')
-                    break
+            with open(KEY_FILE, encoding="utf-8-sig") as f:
+                key = next((l.strip().strip('"') for l in f if l.strip().startswith("gsk_")), "")
         except OSError:
             pass
     return key
+
+
+def save_key(key):
+    key = key.strip().strip('"')
+    if key:
+        with open(KEY_FILE, "w", encoding="utf-8") as f:
+            f.write(key + "\n")
+    elif os.path.exists(KEY_FILE):
+        os.remove(KEY_FILE)
+    _ai_off_until[0] = 0
 
 
 def ai_off(seconds, why):
@@ -816,7 +821,9 @@ def ai_chat(system, user, timeout, json_mode=False):
         raise AIUnavailable()
     key = ai_key()
     if not key:
-        _ai_off_until[0] = time.time() + 10 ** 9      # ключа нет - молча работаем через Google
+        # ключа нет - работаем через Google и один раз подсказываем, где его ввести
+        _ai_off_until[0] = time.time() + 10 ** 9
+        events.put(("type_done", "Нейросеть не подключена — свой бесплатный ключ: значок у часов → Настройки", "info"))
         raise AIUnavailable()
     body = {"model": AI_MODEL, "temperature": 0.2, "max_tokens": 4000, "reasoning_effort": "low",
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
@@ -2423,7 +2430,8 @@ class App:
             if not waiting:
                 if e.keycode == 0x1B:
                     close(False)
-                return "break"
+                    return "break"
+                return None                  # обычный ввод (поле ключа)
             name, b = next(iter(waiting.items()))
             waiting.clear()
             vk = e.keycode
@@ -2493,6 +2501,25 @@ class App:
         check("Переводить нейросетью — по смыслу (F9, F7 и чат)", "ai", new["ai"])
         check("F9 пишет со сленгом (Shift+F9 — наоборот)", "slang", new["slang"])
         check("Запускать вместе с Windows", "autostart", autostart_value() is not None)
+
+        heading("Ключ нейросети Groq", top=14)
+        key_var = tk.StringVar(value=ai_key())
+        row = tk.Frame(win, bg=BG)
+        row.pack(fill="x", padx=24)
+        entry = tk.Entry(row, textvariable=key_var, show="•", bg=FIELD, fg=TEXT_COLOR, insertbackground=TEXT_COLOR,
+                         relief="flat", font=(FONT, -13), highlightthickness=1, highlightbackground="#3A4458",
+                         highlightcolor=ACCENT_COLOR)
+        entry.pack(side="left", fill="x", expand=True, ipady=5)
+        show = tk.Label(row, text="показать", bg=BG, fg=MUTED, font=(FONT, -12), cursor="hand2", padx=8)
+        show.pack(side="left")
+        show.bind("<Button-1>", lambda e: (entry.configure(show="" if entry.cget("show") else "•"),
+                                          show.configure(text="скрыть" if not entry.cget("show") else "показать")))
+        link = tk.Label(win, text="Получить свой бесплатный ключ — console.groq.com/keys", bg=BG, fg="#7AA8FF",
+                        font=(FONT, -12, "underline"), cursor="hand2", anchor="w")
+        link.pack(fill="x", padx=24, pady=(6, 0))
+        link.bind("<Button-1>", lambda e: os.startfile(KEY_URL))
+        note("У каждого свой ключ: бесплатный лимит у ключа общий на всех, кто им пользуется. "
+             "Без ключа переводит Google.")
         region = settings["chat_region"]
         note(f"Область чата: {region[2] - region[0]}×{region[3] - region[1]} — выбрать заново: "
              f"Ctrl+{key_name(new['key_region'])}" if region else
@@ -2501,6 +2528,11 @@ class App:
         def close(save):
             if save:
                 new["ai"], new["slang"] = flags["ai"].get(), flags["slang"].get()
+                if key_var.get().strip() != ai_key():
+                    try:
+                        save_key(key_var.get())
+                    except OSError:
+                        pass
                 if new["ai"] and not settings["ai"]:
                     _ai_off_until[0] = 0
                 settings.update({k: new[k] for k in settings if k != "chat_region"})
