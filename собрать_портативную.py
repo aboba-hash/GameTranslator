@@ -58,6 +58,9 @@ step("Библиотеки из requirements.txt")
 subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "--no-compile", "--target",
                        os.path.join(PY, "Lib", "site-packages"), "-r", os.path.join(HERE, "requirements.txt")],
                       env=dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1"))   # путь на русском
+# консольные утилиты библиотек (mss.exe и т.п.) программе не нужны, а неподписанные .exe - лишний повод
+# для подозрений антивируса
+shutil.rmtree(os.path.join(PY, "Lib", "site-packages", "bin"), ignore_errors=True)
 
 step("Программа")
 for name in ("translator.py", "icon.ico", "проверка.py", "ОПИСАНИЕ.txt"):

@@ -117,7 +117,8 @@ def yandex():
 def ai():
     key = tr.ai_key()
     if not key:
-        return False, "ключ Groq не найден (ключ_groq.txt рядом с программой или GROQ_API_KEY)"
+        return None, ("ключ не введён — нейросеть выключена, переводит Google.\n"
+                      "Свой бесплатный ключ: значок у часов → Настройки")
     tr._ai_off_until[0] = 0
     out = tr.ai_to_en("мб сольемся? все равно не вывезем", True)
     ev = drain()
@@ -141,6 +142,8 @@ def ai_fallback():
         def close(self): pass
 
     tr._ai_off_until[0] = 0
+    real_key = os.environ.get("GROQ_API_KEY")
+    os.environ["GROQ_API_KEY"] = "gsk_test"          # ключ для проверки: ответ "лимит" подставляем сами
     old, tr._ai_conn[0] = tr._ai_conn[0], Conn()
     try:
         out = tr.translate_to("го в мид", "en", True)
@@ -149,6 +152,10 @@ def ai_fallback():
     finally:
         tr._ai_conn[0] = None
         tr._ai_off_until[0] = 0
+        if real_key is None:
+            os.environ.pop("GROQ_API_KEY", None)
+        else:
+            os.environ["GROQ_API_KEY"] = real_key
     ok = off > 0 and ev and "лимит" in ev[0][1] and out.strip()
     return ok, f"сообщение: «{ev[0][1] if ev else '-'}»\nперевод без нейросети: «{out}»"
 
@@ -164,6 +171,8 @@ def mat():
 
 
 def f7_ai():
+    if not tr.ai_key():
+        return None, "пропущено: ключ нейросети не введён"
     img, _ = make_image(True)
     tr._ai_off_until[0] = 0
     blocks = tr.process(img, ai=True)
