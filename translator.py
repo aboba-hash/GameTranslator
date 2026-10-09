@@ -288,6 +288,55 @@ def raise_topmost(win):
         pass
 
 
+def exclusive_fullscreen():
+    """Игра в эксклюзивном полноэкранном режиме (Direct3D): Windows не показывает поверх неё никакие
+    окна - ни наш перевод, ни Discord, ни диспетчер задач."""
+    state = ctypes.c_int(0)
+    try:
+        ctypes.windll.shell32.SHQueryUserNotificationState(ctypes.byref(state))
+    except Exception:
+        return False
+    return state.value == 3          # QUNS_RUNNING_D3D_FULL_SCREEN
+
+
+GWL_STYLE = -16
+BORDER_STYLES = 0x00C00000 | 0x00040000 | 0x00020000 | 0x00010000 | 0x00080000   # заголовок, рамка, кнопки
+user32.GetWindowLongW.restype = ctypes.c_long
+user32.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+_borderless = {}                     # окно -> (прежний стиль, прежние координаты), чтобы вернуть как было
+
+
+def toggle_borderless(hwnd):
+    """Окно игры -> "оконный без рамки" на весь монитор (как полный экран, но перевод поверх виден).
+    Повторно - вернуть как было. Возвращает текст для сообщения."""
+    if not hwnd or not user32.IsWindow(hwnd):
+        return "Сначала откройте игру (в оконном режиме), потом выберите этот пункт"
+    if hwnd in _borderless:
+        style, (x, y, w, h) = _borderless.pop(hwnd)
+        user32.SetWindowLongW(hwnd, GWL_STYLE, style)
+        user32.SetWindowPos(hwnd, None, x, y, w, h, 0x0020 | 0x0200 | 0x0004)   # FRAMECHANGED|NOOWNERZORDER|NOZORDER
+        return "Окно игры возвращено как было"
+    r = ctypes.wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(r))
+    style = user32.GetWindowLongW(hwnd, GWL_STYLE)
+    info = MONITORINFO()
+    info.cbSize = ctypes.sizeof(MONITORINFO)
+    if not user32.GetMonitorInfoW(user32.MonitorFromWindow(hwnd, 2), ctypes.byref(info)):
+        return "Не удалось определить монитор"
+    m = info.rcMonitor
+    if not user32.SetWindowLongW(hwnd, GWL_STYLE, style & ~BORDER_STYLES):
+        return "Windows не дала изменить окно — перезапустите переводчик от имени администратора"
+    _borderless[hwnd] = (style, (r.left, r.top, r.right - r.left, r.bottom - r.top))
+    user32.SetWindowPos(hwnd, None, m.left, m.top, m.right - m.left, m.bottom - m.top, 0x0020 | 0x0200 | 0x0004)
+    return "Окно игры растянуто на весь экран без рамки — перевод теперь виден поверх"
+
+
+def window_title(hwnd):
+    buf = ctypes.create_unicode_buffer(80)
+    user32.GetWindowTextW(hwnd, buf, 80)
+    return buf.value
+
+
 def is_admin():
     try:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
@@ -1783,6 +1832,7 @@ def tray_thread():
         item("Открыть папку с отчётами", lambda: open_folder("отчёты")),
         item("Клавиши", lambda: events.put(("help",))),
         item("Запускать вместе с Windows", toggle_autostart, checked=lambda i: autostart_value() is not None),
+        item("Сделать окно игры без рамки", lambda: events.put(("borderless",))),
         item("Настройки…", lambda: events.put(("settings",))),
         item("Перезапустить от имени администратора", restart_as_admin, visible=not is_admin()),
         menu.SEPARATOR,
@@ -1851,6 +1901,16 @@ class App:
         except queue.Empty:
             pass
         self.ticks = getattr(self, "ticks", 0) + 1
+        if self.ticks % 10 == 5:          # раз в полсекунды запоминаем окно игры - для "окна без рамки"
+            fg = user32.GetForegroundWindow()
+            pid = ctypes.wintypes.DWORD()
+            user32.GetWindowThreadProcessId(fg, ctypes.byref(pid))
+            buf = ctypes.create_unicode_buffer(64)
+            user32.GetClassNameW(fg, buf, 64)
+            if fg and pid.value != os.getpid() and buf.value not in (
+                    "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "NotifyIconOverflowWindow", "Progman", "WorkerW",
+                    "TopLevelWindowForOverflowXamlIsland", "Windows.UI.Core.CoreWindow"):
+                self.last_window = fg
         if self.ticks % 10 == 0:          # раз в полсекунды - свои окна снова наверх
             for win in (self.overlay, self.cap_win, self.toast, self.shot_win, self.selector):
                 if win is not None:
@@ -1859,7 +1919,15 @@ class App:
 
     def handle(self, ev):
         kind = ev[0]
-        if kind == "hotkey":
+        if kind in ("hotkey", "select", "chat", "chat_new") and exclusive_fullscreen():
+            # поверх эксклюзивного полного экрана ничего не видно - сигнал сейчас, подсказка - когда выйдут из игры
+            user32.MessageBeep(0x30)
+            self.show_toast("Игра в эксклюзивном полноэкранном режиме — поверх неё Windows ничего не показывает",
+                            "warn", ms=15000, sub="В настройках игры выберите «Оконный без рамки» или «Оконный», "
+                                                 "затем значок у часов → «Сделать окно игры без рамки»")
+        if kind == "borderless":
+            self.show_toast(toggle_borderless(getattr(self, "last_window", None)), "info", ms=3500)
+        elif kind == "hotkey":
             if self.selector:
                 self.close_selector()
             elif self.live and not self.chat:
